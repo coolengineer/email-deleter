@@ -1,0 +1,31 @@
+
+profiles = {
+    "gmail": {
+        "host": "imap.gmail.com",
+        "user": "example@gmail.com",
+        "mailbox": "INBOX",
+    }
+}
+
+default_profile = "gmail"
+
+SUBJECT_PATTERNS = [
+    "모니터링 이벤트 알림",
+    "동안 발생 빈도가 높아진 안정성 문제",
+    "[JIRA] (",
+    "[Firebase] Crashlytics 신속 알림",
+    "(광고)",
+    "[광고]",
+    "App Store Connect:",
+    "테스트",
+]
+
+SENDER_PATTERNS = [
+    "@ifttt.com",
+    "no_reply@email.apple.com",
+    "do-not-reply@imdb.com",
+]
+
+RECEIVERS_PATTERNS = [
+]
+

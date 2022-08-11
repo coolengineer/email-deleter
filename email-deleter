@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+
+# System
+import os
+import re
+import sys
+import json
+import email
+import imaplib
+import getpass
+import logging
+import datetime
+import traceback
+
+# Project
+import termchars
+try:
+    import config
+    config.default_profile
+    config.profiles
+    config.SUBJECT_PATTERNS
+    config.SENDER_PATTERNS
+    config.RECEIVERS_PATTERNS
+except ModuleNotFoundError:
+    print("Copy config.py.sample to config.py and edit it!")
+    sys.exit(1)
+except AttributeError as e:
+    print("Check your config.py")
+    print(e)
+    sys.exit(1)
+
+logger = logging.getLogger("email-deleter")
+logger.setLevel(logging.ERROR)
+
+def getpassword(profile, account):
+    if sys.platform != "darwin":
+        return None
+
+    def decode_hex(s):
+        s = eval('"' + re.sub(r"(..)", r"\x\1", s) + '"')
+        if "" in s: s = s[:s.index("")]
+        return s
+
+    cmd = ' '.join([
+        "/usr/bin/security",
+        " find-generic-password",
+        "-g -s '%s' -a '%s'" % (profile, account),
+        "2>&1 >/dev/null"
+    ])
+    p = os.popen(cmd)
+    s = p.read()
+    p.close()
+    m = re.match(r"password: (?:0x([0-9A-F]+)\s*)?\"(.*)\"$", s)
+    if m:
+        hexform, stringform = m.groups()
+        if hexform:
+            return decode_hex(hexform)
+        else:
+            return stringform
+
+
+def setpassword(profile, account, password):
+    if sys.platform != "darwin":
+        return None
+
+    cmd = 'security add-generic-password -U -a %s -s %s -p %s' % (account, profile, password)
+    p = os.popen(cmd)
+    s = p.read()
+    p.close()
+
+def shall_we_delete(subject, senders, receivers):
+    for token in config.SUBJECT_PATTERNS:
+        if subject.find(token) != -1:
+            return True
+    for token in config.SENDER_PATTERNS:
+        for sender in senders:
+            if sender.find(token) != -1:
+                return True
+    for token in config.RECEIVERS_PATTERNS:
+        for receiver in receivers:
+            if receiver.find(token) != -1:
+                return True
+    return False
+
+def get_header(mail, header):
+    try:
+        if mail is None:
+            return ""
+
+        content = mail.get(header) or ""
+
+        def _decode(arg):
+            value, encoding = arg
+            if type(value) == str:
+                return value
+
+            if value is None:
+                return ''
+
+            if encoding is None:
+                return value.decode()
+
+            return value.decode(encoding)
+
+        return ' '.join(map(_decode, email.header.decode_header(content)))
+
+    except Exception as e:
+        traceback.print_exc()
+        print( f"fetching {header} email {mail}" )
+        return ""
+
+def get_emails(mail, header):
+    value = mail.get(header)
+    if value is None:
+        return [ "" ]
+    return re.findall(r'''([a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+)''', value)
+
+def prepare_cache_dir(host, user):
+    if user.find("@") != -1:
+        dirname = f"mailbox/{user}"
+    else:
+        dirname = f"mailbox/{user}@{host}"
+    os.makedirs(dirname, exist_ok=True)
+
+def search_mails(imapclient, since):
+    #typ, data = imapclient.search(None, f'(SINCE "{since}")')
+    typ, data = imapclient.uid("SEARCH", 'ALL')
+    mailuids = list( map(lambda mailuid: mailuid.decode(), data[0].split()))
+    logger.debug(f"MAILDS: " + ", ".join(mailuids))
+    return mailuids
+
+def fetch_mail(imapclient, host, user, mailuid):
+    try:
+        filename = mailuid + '.eml'
+        if user.find("@") != -1:
+            filename = f"mailbox/{user}/{filename}"
+        else:
+            filename = f"mailbox/{user}@{host}/{filename}"
+        content = open(filename, "rb").read()
+    except:
+        typ, data = imapclient.uid("FETCH", mailuid, 'BODY.PEEK[HEADER]')
+        content = data[0][1]
+        open(filename, "wb").write(content)
+
+    mail = email.message_from_bytes(content)
+    return mail
+
+def list_mailbox(imapclient):
+    l = imapclient.list()
+    for ll in l[1]:
+        print(ll.replace(b'&',b'+').decode('utf-7'))
+
+def delete_mail(imapclient, mailuid):
+    try:
+        imapclient.uid("STORE", mailuid, "+FLAGS", '''\Deleted''')
+    except imaplib.IMAP4.error as e:
+        print(e.args[0])
+
+def normalize_date(date):
+    for fmt in [
+        "%a, %d %b %Y %H:%M:%S %z",
+        "%d %b %Y %H:%M:%S %z",
+    ]:
+        # 맨 뒤의 English Timezone (ex; (KST)) 제거
+        date = re.sub(r' \([A-Z]{3,4}\)\s*$', '', date)
+        try:
+            date = datetime.datetime.strptime(date, fmt)
+            # Convert to KST
+            date = date.astimezone(datetime.timezone(datetime.timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
+            return date
+        except ValueError:
+            pass
+    return date
+
+def delete_at_once(host, user, passwd, mailbox, dryrun, since, imapclient = None):
+
+    if imapclient is None:
+        imapclient = imaplib.IMAP4_SSL(host)
+        imapclient.login(user, passwd)
+
+    result = imapclient.select(mailbox.encode('utf-7').replace(b'+', b'&'))
+    if result[0] != "OK":
+        print(result[1][0].decode())
+        return True
+
+    prepare_cache_dir(host, user)
+
+    count = 0
+    mailuids = search_mails(imapclient, since)
+    for mailuid in mailuids:
+        count += 1
+        try:
+            mail = fetch_mail(imapclient, host, user, mailuid)
+            subject = get_header(mail, "Subject")
+            date = get_header(mail, "Date")
+            senders = get_emails(mail, "From")
+            receivers = get_emails(mail, "To")
+            ccs = get_emails(mail, "Cc")
+            sender = ",".join(senders)
+            receiver = ",".join(receivers + ccs)
+            date2 = date
+            date = normalize_date(date)
+
+            subject = subject.replace("\n", "").replace("\r", "")
+            subject2 = termchars.substr(subject, 0, 70, fill=True)
+            print(f"({count}) {subject2} {date} {sender:40.40} {receiver:40.40}", end="")
+            if shall_we_delete(subject, senders, receivers + ccs):
+                print(f"  ---> DELETE")
+                if not dryrun:
+                    delete_mail(imapclient, mailuid)
+            else:
+                print(f"  ---> KEEP")
+        except imaplib.IMAP4.error as e:
+            print(f"Error: {e.arg[0]}")
+            imapclient.close()
+            return False
+
+    return True
+
+def main(profile, dryrun=True, mailbox_list=False, **kwargs):
+    profile = config.profiles.get(profile)
+    if profile is None:
+        print("Invalid profile")
+        return
+
+    passwd = getpassword(profile["host"], profile["user"])
+    if passwd is not None:
+        imapclient = imaplib.IMAP4_SSL(profile["host"])
+        result = imapclient.login(profile["user"], passwd)
+
+    while not passwd:
+        passwd = getpass.getpass(f"Password for {profile['user']}: ")
+        imapclient = imaplib.IMAP4_SSL(profile["host"])
+        try:
+            result = imapclient.login(profile["user"], passwd)
+            if result[0] == 'OK':
+                setpassword(profile["host"], profile["user"], passwd)
+                break
+        except imaplib.IMAP4.error as e:
+            print(e.args[0].decode())
+            passwd = None
+    profile["passwd"] = passwd
+
+    if mailbox_list:
+        list_mailbox(imapclient)
+        return
+
+    since = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime("%d-%b-%Y")
+    while True:
+        if delete_at_once(dryrun=dryrun, since=since, imapclient=imapclient, **profile):
+            break
+        imapclient = None
+
+try:
+    dryrun = True
+    profile = config.default_profile
+    for arg in sys.argv:
+        if arg == "go":
+            dryrun = False
+        elif arg == "debug":
+            logger.setLevel(logging.DEBUG)
+            imaplib.Debug = 4
+        elif arg == "list":
+            mailbox_list = True
+        elif arg in config.profiles:
+            profile = arg
+
+    main(**locals())
+    if dryrun:
+        logger.error("")
+        logger.error("If you want to delete, pass 'go' argument")
+        logger.error(f"   {' '.join(sys.argv)} go")
+        logger.error("")
+except KeyboardInterrupt:
+    print("\nOk, quit.")
