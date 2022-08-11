@@ -29,7 +29,18 @@ except AttributeError as e:
     print(e)
     sys.exit(1)
 
-logger = logging.getLogger("email-deleter")
+# We use root logger
+logConfig = {
+    "format": "%(asctime)s %(levelname)s %(message)s",
+    "datefmt": "%Y-%m-%d %H:%M:%S",
+}
+
+if hasattr(config, "log"):
+    logging.basicConfig(**config.log)
+else:
+    logging.basicConfig(**logConfig)
+
+logger = logging.getLogger()
 logger.setLevel(logging.ERROR)
 
 def getpassword(profile, account):
@@ -154,7 +165,7 @@ def delete_mail(imapclient, mailuid):
     try:
         imapclient.uid("STORE", mailuid, "+FLAGS", '''\Deleted''')
     except imaplib.IMAP4.error as e:
-        print(e.args[0])
+        logger.error(e.args[0])
 
 def normalize_date(date):
     for fmt in [
@@ -211,7 +222,7 @@ def delete_at_once(host, user, passwd, mailbox, dryrun, since, imapclient = None
             else:
                 print(f"  ---> KEEP")
         except imaplib.IMAP4.error as e:
-            print(f"Error: {e.arg[0]}")
+            logger.error(f"Error: {e.arg[0]}")
             imapclient.close()
             return False
 
@@ -220,7 +231,7 @@ def delete_at_once(host, user, passwd, mailbox, dryrun, since, imapclient = None
 def main(profile, dryrun=True, mailbox_list=False, **kwargs):
     profile = config.profiles.get(profile)
     if profile is None:
-        print("Invalid profile")
+        logger.error("Invalid profile")
         return
 
     passwd = getpassword(profile["host"], profile["user"])
@@ -237,7 +248,7 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
                 setpassword(profile["host"], profile["user"], passwd)
                 break
         except imaplib.IMAP4.error as e:
-            print(e.args[0].decode())
+            logger.error(e.args[0].decode())
             passwd = None
     profile["passwd"] = passwd
 
@@ -272,4 +283,4 @@ try:
         logger.error(f"   {' '.join(sys.argv)} go")
         logger.error("")
 except KeyboardInterrupt:
-    print("\nOk, quit.")
+    logger.error("\nOk, quit.")
