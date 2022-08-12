@@ -1,0 +1,3 @@
+[submodule "termchars"]
+	path = termchars
+	url = git@github.com:coolengineer/termchars.git
