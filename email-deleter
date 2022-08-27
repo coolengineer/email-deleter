@@ -236,7 +236,9 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
 
     passwd = getpassword(profile["host"], profile["user"])
     if passwd is not None:
-        imapclient = imaplib.IMAP4_SSL(profile["host"])
+        ssl_context = imaplib.ssl._create_stdlib_context()
+        ssl_context.set_ciphers('DEFAULT@SECLEVEL=1')
+        imapclient = imaplib.IMAP4_SSL(profile["host"], ssl_context=ssl_context)
         result = imapclient.login(profile["user"], passwd)
 
     while not passwd:
