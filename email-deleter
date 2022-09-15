@@ -123,7 +123,7 @@ def get_header(mail, header):
 def get_emails(mail, header):
     value = mail.get(header)
     if value is None:
-        return [ "" ]
+        return []
     return re.findall(r'''([a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+)''', value)
 
 def prepare_cache_dir(host, user):
@@ -183,7 +183,7 @@ def normalize_date(date):
             pass
     return date
 
-def delete_at_once(host, user, passwd, mailbox, dryrun, since, imapclient = None):
+def delete_at_once(profile, host, user, passwd, mailbox, dryrun, since, imapclient = None):
 
     if imapclient is None:
         imapclient = imaplib.IMAP4_SSL(host)
@@ -214,7 +214,7 @@ def delete_at_once(host, user, passwd, mailbox, dryrun, since, imapclient = None
 
             subject = subject.replace("\n", "").replace("\r", "")
             subject2 = termchars.substr(subject, 0, 70, fill=True)
-            print(f"({count}) {subject2} {date} {sender:40.40} {receiver:40.40}", end="")
+            print(f"({profile}:{count}) {subject2} {date} {sender:40.40} {receiver:40.40}", end="")
             if shall_we_delete(subject, senders, receivers + ccs):
                 print(f"  ---> DELETE")
                 if not dryrun:
@@ -222,37 +222,41 @@ def delete_at_once(host, user, passwd, mailbox, dryrun, since, imapclient = None
             else:
                 print(f"  ---> KEEP")
         except imaplib.IMAP4.error as e:
-            logger.error(f"Error: {e.arg[0]}")
+            logger.error(f"Error: {e.args[0]}")
             imapclient.close()
             return False
 
     return True
 
 def main(profile, dryrun=True, mailbox_list=False, **kwargs):
-    profile = config.profiles.get(profile)
-    if profile is None:
+    profile_conf = config.profiles.get(profile)
+    if profile_conf is None:
         logger.error("Invalid profile")
         return
 
-    passwd = getpassword(profile["host"], profile["user"])
+    if 'mailbox' not in profile_conf:
+        print("No mailbox specified, list mail boxes")
+        mailbox_list = True
+
+    passwd = getpassword(profile_conf["host"], profile_conf["user"])
     if passwd is not None:
         ssl_context = imaplib.ssl._create_stdlib_context()
         ssl_context.set_ciphers('DEFAULT@SECLEVEL=1')
-        imapclient = imaplib.IMAP4_SSL(profile["host"], ssl_context=ssl_context)
-        result = imapclient.login(profile["user"], passwd)
+        imapclient = imaplib.IMAP4_SSL(profile_conf["host"], ssl_context=ssl_context)
+        result = imapclient.login(profile_conf["user"], passwd)
 
     while not passwd:
-        passwd = getpass.getpass(f"Password for {profile['user']}: ")
-        imapclient = imaplib.IMAP4_SSL(profile["host"])
+        passwd = getpass.getpass(f"Password for {profile_conf['user']}: ")
+        imapclient = imaplib.IMAP4_SSL(profile_conf["host"])
         try:
-            result = imapclient.login(profile["user"], passwd)
+            result = imapclient.login(profile_conf["user"], passwd)
             if result[0] == 'OK':
-                setpassword(profile["host"], profile["user"], passwd)
+                setpassword(profile_conf["host"], profile_conf["user"], passwd)
                 break
         except imaplib.IMAP4.error as e:
             logger.error(e.args[0].decode())
             passwd = None
-    profile["passwd"] = passwd
+    profile_conf["passwd"] = passwd
 
     if mailbox_list:
         list_mailbox(imapclient)
@@ -260,13 +264,14 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
 
     since = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime("%d-%b-%Y")
     while True:
-        if delete_at_once(dryrun=dryrun, since=since, imapclient=imapclient, **profile):
+        if delete_at_once(profile, dryrun=dryrun, since=since, imapclient=imapclient, **profile_conf):
             break
         imapclient = None
 
 try:
     dryrun = True
     profile = config.default_profile
+    profiles = []
     for arg in sys.argv:
         if arg == "go":
             dryrun = False
@@ -276,9 +281,13 @@ try:
         elif arg == "list":
             mailbox_list = True
         elif arg in config.profiles:
-            profile = arg
+            profiles.append(arg)
 
-    main(**locals())
+    if len(profiles) == 0:
+        profiles.append(profile)
+
+    for profile in profiles:
+        main(**locals())
     if dryrun:
         logger.error("")
         logger.error("If you want to delete, pass 'go' argument")
