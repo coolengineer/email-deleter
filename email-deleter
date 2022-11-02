@@ -167,6 +167,10 @@ def delete_mail(imapclient, mailuid):
     except imaplib.IMAP4.error as e:
         logger.error(e.args[0])
 
+# Fri, 16 Sep 2022 05:57:25 UTC
+# Mon, 12 Oct 2020 01:54:44 +0000 (GMT-00:00)
+# 4 Oct 2022 13:53:56 +0900(KST)
+
 def normalize_date(date):
     for fmt in [
         "%a, %d %b %Y %H:%M:%S %z",
@@ -174,6 +178,7 @@ def normalize_date(date):
     ]:
         # 맨 뒤의 English Timezone (ex; (KST)) 제거
         date = re.sub(r' \([A-Z]{3,4}\)\s*$', '', date)
+        date = re.sub(r'\s?\(?UTC|GMT([+-]\d\d:\d\d)?\)?\s*$', '', date)
         try:
             date = datetime.datetime.strptime(date, fmt)
             # Convert to KST
