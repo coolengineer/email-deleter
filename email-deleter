@@ -122,9 +122,13 @@ def get_header(mail, header):
 
 def get_emails(mail, header):
     value = mail.get(header)
+    value = str(value)
     if value is None:
         return []
-    return re.findall(r'''([a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+)''', value)
+    try:
+        return re.findall(r'''([a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+)''', value)
+    except:
+        raise
 
 def prepare_cache_dir(host, user):
     if user.find("@") != -1:
@@ -170,21 +174,27 @@ def delete_mail(imapclient, mailuid):
 # Fri, 16 Sep 2022 05:57:25 UTC
 # Mon, 12 Oct 2020 01:54:44 +0000 (GMT-00:00)
 # 4 Oct 2022 13:53:56 +0900(KST)
-
 def normalize_date(date):
+    try:
+        tzinfo = datetime.datetime.strptime(config.timezone, "%z").tzinfo
+    except:
+        tzinfo = None
     for fmt in [
-        "%a, %d %b %Y %H:%M:%S %z",
         "%d %b %Y %H:%M:%S %z",
     ]:
         # 맨 뒤의 English Timezone (ex; (KST)) 제거
-        date = re.sub(r' \([A-Z]{3,4}\)\s*$', '', date)
-        date = re.sub(r'\s?\(?UTC|GMT([+-]\d\d:\d\d)?\)?\s*$', '', date)
+        org_date = date
+        date = re.sub(r'.*?(\d\d?\s+[A-Za-z]{3}\s+\d{4}\s+\d\d:\d\d:\d\d\s+([A-Z]{3,4}|[+-]\d\d\d\d)).*', r'\1', date)
+        date = date.replace("GMT", "+0000")
+        date = date.replace("UTC", "+0000")
         try:
             date = datetime.datetime.strptime(date, fmt)
-            # Convert to KST
-            date = date.astimezone(datetime.timezone(datetime.timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
+            if tzinfo is not None:
+                date = date.astimezone(tzinfo)
+            date = date.strftime("%Y-%m-%d %H:%M:%S")
             return date
         except ValueError:
+            #print( f'{fmt},[{date}],[{org_date}]' )
             pass
     return date
 
@@ -212,6 +222,7 @@ def delete_at_once(profile, host, user, passwd, mailbox, dryrun, since, imapclie
             senders = get_emails(mail, "From")
             receivers = get_emails(mail, "To")
             ccs = get_emails(mail, "Cc")
+            replytos = get_emails(mail, "Reply-To")
             sender = ",".join(senders)
             receiver = ",".join(receivers + ccs)
             date2 = date
@@ -220,16 +231,20 @@ def delete_at_once(profile, host, user, passwd, mailbox, dryrun, since, imapclie
             subject = subject.replace("\n", "").replace("\r", "")
             subject2 = termchars.substr(subject, 0, 70, fill=True)
             print(f"({profile}:{count}) {subject2} {date} {sender:40.40} {receiver:40.40}", end="")
-            if shall_we_delete(subject, senders, receivers + ccs):
+            if shall_we_delete(subject, senders, receivers + ccs + replytos):
                 print(f"  ---> DELETE")
                 if not dryrun:
                     delete_mail(imapclient, mailuid)
             else:
                 print(f"  ---> KEEP")
         except imaplib.IMAP4.error as e:
+            logger.error(f"Error in treating mailuid {mailuid}")
             logger.error(f"Error: {e.args[0]}")
             imapclient.close()
             return False
+        except:
+            logger.error(f"Error in treating mailuid {mailuid}")
+            raise
 
     return True
 

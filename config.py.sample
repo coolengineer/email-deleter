@@ -8,6 +8,7 @@ profiles = {
 }
 
 default_profile = "gmail"
+timezone = "+0900"
 
 SUBJECT_PATTERNS = [
     "모니터링 이벤트 알림",
