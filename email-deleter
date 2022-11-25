@@ -240,6 +240,7 @@ def delete_at_once(profile, host, user, passwd, mailbox, dryrun, since, imapclie
         except imaplib.IMAP4.error as e:
             logger.error(f"Error in treating mailuid {mailuid}")
             logger.error(f"Error: {e.args[0]}")
+            imapclient.print_log()
             imapclient.close()
             return False
         except:
@@ -262,7 +263,18 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
     if passwd is not None:
         ssl_context = imaplib.ssl._create_stdlib_context()
         ssl_context.set_ciphers('DEFAULT@SECLEVEL=1')
-        imapclient = imaplib.IMAP4_SSL(profile_conf["host"], ssl_context=ssl_context)
+        imapclient = None
+        trycount = 2
+        while imapclient is None and trycount > 0:
+            try:
+                imapclient = imaplib.IMAP4_SSL(profile_conf["host"], ssl_context=ssl_context)
+            except imaplib.ssl.SSLError:
+                traceback.print_exc()
+            trycount -= 1
+        if imapclient is None:
+            print(f"Can't establish connection to {profile_conf['host']}")
+            return
+        print(f"* Connected to {profile_conf['host']}")
         result = imapclient.login(profile_conf["user"], passwd)
 
     while not passwd:
