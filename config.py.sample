@@ -1,5 +1,10 @@
 
 profiles = {
+    "worksmobile": {
+        "host": "imap.worksmobile.com",
+        "user": "example@example.com",
+        "mailbox": "INBOX",
+    },
     "gmail": {
         "host": "imap.gmail.com",
         "user": "example@gmail.com",
