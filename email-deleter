@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import json
+import time
 import email
 import imaplib
 import getpass
@@ -111,7 +112,10 @@ def get_header(mail, header):
             if encoding is None:
                 return value.decode()
 
-            return value.decode(encoding)
+            try:
+                return value.decode(encoding)
+            except LookupError:
+                return value.decode()
 
         return ' '.join(map(_decode, email.header.decode_header(content)))
 
@@ -269,7 +273,7 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
             try:
                 imapclient = imaplib.IMAP4_SSL(profile_conf["host"], ssl_context=ssl_context)
             except imaplib.ssl.SSLError:
-                traceback.print_exc()
+                logger.debug(f"Connect: " + traceback.format_exc())
             trycount -= 1
         if imapclient is None:
             print(f"Can't establish connection to {profile_conf['host']}")
@@ -318,8 +322,11 @@ try:
     if len(profiles) == 0:
         profiles.append(profile)
 
-    for profile in profiles:
+    while len(profiles):
+        profile = profiles.pop(0)
         main(**locals())
+        if len(profiles):
+            time.sleep(1)
     if dryrun:
         logger.error("")
         logger.error("If you want to delete, pass 'go' argument")
