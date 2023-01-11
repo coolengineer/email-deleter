@@ -279,7 +279,11 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
             print(f"Can't establish connection to {profile_conf['host']}")
             return
         print(f"* Connected to {profile_conf['host']}")
-        result = imapclient.login(profile_conf["user"], passwd)
+        try:
+            result = imapclient.login(profile_conf["user"], passwd)
+        except imaplib.IMAP4.error as e:
+            print(e.args[0].decode())
+            passwd = None
 
     while not passwd:
         passwd = getpass.getpass(f"Password for {profile_conf['user']}: ")
