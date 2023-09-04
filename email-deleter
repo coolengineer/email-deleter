@@ -303,10 +303,19 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
         return
 
     since = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime("%d-%b-%Y")
-    while True:
-        if delete_at_once(profile, dryrun=dryrun, since=since, imapclient=imapclient, **profile_conf):
-            break
-        imapclient = None
+    mailboxes = profile_conf.get("mailbox", None)
+    if mailboxes is None:
+        return
+    del profile_conf["mailbox"]
+
+    if type(mailboxes) != list:
+        mailboxes = [ mailboxes ]
+
+    for mailbox in mailboxes:
+        while True:
+            if delete_at_once(profile, dryrun=dryrun, since=since, imapclient=imapclient, mailbox=mailbox, **profile_conf):
+                break
+            imapclient = None
 
 try:
     dryrun = True
