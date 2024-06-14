@@ -326,10 +326,13 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
             imapclient = None
 
 try:
+    showhelp = False
     dryrun = True
     profile = config.default_profile
     profiles = []
     for arg in sys.argv:
+        if arg == "help":
+            showhelp = True
         if arg == "go":
             dryrun = False
         elif arg == "debug":
@@ -339,6 +342,14 @@ try:
             mailbox_list = True
         elif arg in config.profiles:
             profiles.append(arg)
+
+    if showhelp:
+        print("Usage: %s [profile]... [go] [debug] [list]" % sys.argv[0])
+        print("  profile: %s" % ", ".join(config.profiles.keys()))
+        print("  go: delete mails")
+        print("  list: list mailboxes")
+        print("  debug: debug mode")
+        sys.exit(0)
 
     if len(profiles) == 0:
         profiles.append(profile)
