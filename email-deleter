@@ -110,19 +110,19 @@ def get_header(mail, header):
                 return ''
 
             if encoding is None:
-                return value.decode()
+                return value.decode(errors='ignore')
 
             try:
                 if encoding == 'unknown-8bit':
                     encoding = 'euckr'
                     try:
-                        return value.decode(encoding)
+                        return value.decode(encoding, errors='ignore')
                     except:
                         encoding = 'utf8'
-                return value.decode(encoding)
+                return value.decode(encoding, errors='ignore')
 
             except LookupError:
-                return value.decode()
+                return value.decode(errors='ignore')
 
         return ' '.join(map(_decode, email.header.decode_header(content)))
 
