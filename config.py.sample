@@ -9,8 +9,15 @@ profiles = {
         "host": "imap.gmail.com",
         "user": "example@gmail.com",
         "mailbox": "INBOX",
+    },
+    "zmail": {
+        "host": "imap.gmail.com",
+        "user": "example@gmail.com",
+        "mailbox": ["INBOX", "Letters"],
     }
 }
+
+# "mailbox" 는 단일 스트링 혹은 리스트가 가능함
 
 default_profile = "gmail"
 timezone = "+0900"
