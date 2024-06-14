@@ -178,7 +178,7 @@ def list_mailbox(imapclient):
 
 def delete_mail(imapclient, mailuid):
     try:
-        imapclient.uid("STORE", mailuid, "+FLAGS", '''\Deleted''')
+        imapclient.uid("STORE", mailuid, "+FLAGS", r'''\Deleted''')
     except imaplib.IMAP4.error as e:
         logger.error(e.args[0])
 
