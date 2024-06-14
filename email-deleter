@@ -44,18 +44,23 @@ else:
 logger = logging.getLogger()
 logger.setLevel(logging.ERROR)
 
-def getpassword(profile, account):
-    if sys.platform != "darwin":
+def get_password(profile, account):
+    if sys.platform == "darwin":
+        return get_password_macos(profile, account)
+    elif sys.platform == "win32":
+        return get_password_windows(profile, account)
+    else:
         return None
 
+def get_password_macos(profile, account):
     def decode_hex(s):
-        s = eval('"' + re.sub(r"(..)", r"\x\1", s) + '"')
+        s = eval('"' + re.sub(r"(..)", r"\\x\\1", s) + '"')
         if "" in s: s = s[:s.index("")]
         return s
 
     cmd = ' '.join([
         "/usr/bin/security",
-        " find-generic-password",
+        "find-generic-password",
         "-g -s '%s' -a '%s'" % (profile, account),
         "2>&1 >/dev/null"
     ])
@@ -69,16 +74,63 @@ def getpassword(profile, account):
             return decode_hex(hexform)
         else:
             return stringform
+    return None
 
+def get_password_windows(profile, account):
+    try:
+        import win32cred
+    except ImportError:
+        raise ImportError("The pywin32 module is required on Windows for accessing credentials.")
 
-def setpassword(profile, account, password):
-    if sys.platform != "darwin":
+    target = f"{profile}/{account}"
+    try:
+        cred = win32cred.CredRead(
+            Type=win32cred.CRED_TYPE_GENERIC,
+            TargetName=target
+        )
+        return cred['CredentialBlob'].decode('utf-8')
+    except win32cred.error:
         return None
 
+import os
+import sys
+
+def set_password(profile, account, password):
+    if sys.platform == "darwin":
+        return set_password_macos(profile, account, password)
+    elif sys.platform == "win32":
+        return set_password_windows(profile, account, password)
+    else:
+        return None
+
+def set_password_macos(profile, account, password):
     cmd = 'security add-generic-password -U -a %s -s %s -p %s' % (account, profile, password)
     p = os.popen(cmd)
     s = p.read()
     p.close()
+    return s
+
+def set_password_windows(profile, account, password):
+    try:
+        import win32cred
+    except ImportError:
+        return None
+
+    target = f"{profile}/{account}"
+    credential = {
+        'Type': win32cred.CRED_TYPE_GENERIC,
+        'TargetName': target,
+        'UserName': account,
+        'CredentialBlob': password.encode('utf-8'),
+        'Comment': f'Credential for {account} at {profile}',
+        'Persist': win32cred.CRED_PERSIST_LOCAL_MACHINE
+    }
+    try:
+        win32cred.CredWrite(credential, 0)
+        return True
+    except win32cred.error as e:
+        print(f"Failed to set password: {e}")
+    return False
 
 def shall_we_delete(subject, senders, receivers):
     for token in config.SUBJECT_PATTERNS:
@@ -271,7 +323,7 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
         print("No mailbox specified, list mail boxes")
         mailbox_list = True
 
-    passwd = getpassword(profile_conf["host"], profile_conf["user"])
+    passwd = get_password(profile_conf["host"], profile_conf["user"])
     if passwd is not None:
         ssl_context = imaplib.ssl._create_stdlib_context()
         ssl_context.set_ciphers('DEFAULT@SECLEVEL=1')
@@ -299,7 +351,7 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
         try:
             result = imapclient.login(profile_conf["user"], passwd)
             if result[0] == 'OK':
-                setpassword(profile_conf["host"], profile_conf["user"], passwd)
+                set_password(profile_conf["host"], profile_conf["user"], passwd)
                 break
         except imaplib.IMAP4.error as e:
             logger.error(e.args[0].decode())
