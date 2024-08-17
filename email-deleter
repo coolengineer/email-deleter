@@ -36,6 +36,8 @@ logConfig = {
     "datefmt": "%Y-%m-%d %H:%M:%S",
 }
 
+mailbox = "./mailbox"
+
 if hasattr(config, "log"):
     logging.basicConfig(**config.log)
 else:
@@ -133,6 +135,7 @@ def set_password_windows(profile, account, password):
     return False
 
 def shall_we_delete(subject, senders, receivers):
+    #print(f"Checking {subject} / {senders} / {receivers}")
     for token in config.SUBJECT_PATTERNS:
         if subject.find(token) != -1:
             return True
@@ -195,9 +198,9 @@ def get_emails(mail, header):
 
 def prepare_cache_dir(host, user):
     if user.find("@") != -1:
-        dirname = f"mailbox/{user}"
+        dirname = f"{mailbox}/{user}"
     else:
-        dirname = f"mailbox/{user}@{host}"
+        dirname = f"{mailbox}/{user}@{host}"
     os.makedirs(dirname, exist_ok=True)
 
 def search_mails(imapclient, since):
@@ -207,13 +210,19 @@ def search_mails(imapclient, since):
     logger.debug(f"MAILDS: " + ", ".join(mailuids))
     return mailuids
 
-def fetch_mail(imapclient, host, user, mailuid):
+def fetch_mail(imapclient, mailuid):
+    typ, data = imapclient.uid("FETCH", mailuid, 'BODY.PEEK[]')
+    content = data[0][1]
+    mail = email.message_from_bytes(content)
+    return mail
+
+def fetch_headers(imapclient, host, user, mailuid):
     try:
         filename = mailuid + '.eml'
         if user.find("@") != -1:
-            filename = f"mailbox/{user}/{filename}"
+            filename = f"{mailbox}/{user}/{filename}"
         else:
-            filename = f"mailbox/{user}@{host}/{filename}"
+            filename = f"{mailbox}/{user}@{host}/{filename}"
         content = open(filename, "rb").read()
     except:
         typ, data = imapclient.uid("FETCH", mailuid, 'BODY.PEEK[HEADER]')
@@ -221,7 +230,19 @@ def fetch_mail(imapclient, host, user, mailuid):
         open(filename, "wb").write(content)
 
     mail = email.message_from_bytes(content)
-    return mail
+    return mail, filename
+
+def save_mailmap(profile, mailmap):
+    filename = f"{mailbox}/{profile}.json"
+    with open(filename, "w") as f:
+        json.dump(mailmap, f)
+
+def load_mailmap(profile):
+    filename = f"{mailbox}/{profile}.json"
+    if not os.path.exists(filename):
+        return {}
+    with open(filename, "r") as f:
+        return json.load(f)
 
 def list_mailbox(imapclient):
     l = imapclient.list()
@@ -261,16 +282,21 @@ def normalize_date(date):
             pass
     return date
 
-def delete_at_once(profile, host, user, passwd, mailbox, dryrun, since, imapclient = None):
+def select_mailbox(imapclient, mailbox):
+    result = imapclient.select(mailbox.encode('utf-7').replace(b'+', b'&'))
+    if result[0] != "OK":
+        print(result[1][0].decode())
+        return False
+    return True
+
+def delete_at_once(profile, host, user, passwd, mailbox, dryrun, since, mailmap, imapclient = None):
 
     if imapclient is None:
         imapclient = imaplib.IMAP4_SSL(host)
         imapclient.login(user, passwd)
 
-    result = imapclient.select(mailbox.encode('utf-7').replace(b'+', b'&'))
-    if result[0] != "OK":
-        print(result[1][0].decode())
-        return True
+    if not select_mailbox(imapclient, mailbox):
+        return False
 
     prepare_cache_dir(host, user)
 
@@ -279,7 +305,12 @@ def delete_at_once(profile, host, user, passwd, mailbox, dryrun, since, imapclie
     for mailuid in mailuids:
         count += 1
         try:
-            mail = fetch_mail(imapclient, host, user, mailuid)
+            mail, filename = fetch_headers(imapclient, host, user, mailuid)
+            mailmap[f"{profile}:{count}"] = {
+                "headers": filename,
+                "mailbox": mailbox,
+                "mailuid": mailuid
+            }
             subject = get_header(mail, "Subject")
             date = get_header(mail, "Date")
             senders = get_emails(mail, "From")
@@ -293,8 +324,8 @@ def delete_at_once(profile, host, user, passwd, mailbox, dryrun, since, imapclie
 
             subject = subject.replace("\n", "").replace("\r", "")
             subject2 = termchars.substr(subject, 0, 70, fill=True)
-            print(f"({profile}:{count}) {subject2} {date} {sender:40.40} {receiver:40.40}", end="")
-            if shall_we_delete(subject, senders, receivers + ccs + replytos):
+            print(f"{profile}:{count} {subject2} {date} {sender:40.40} {receiver:40.40}", end="")
+            if shall_we_delete(subject, senders + replytos, receivers + ccs):
                 print(f"  ---> DELETE")
                 if not dryrun:
                     delete_mail(imapclient, mailuid)
@@ -313,16 +344,7 @@ def delete_at_once(profile, host, user, passwd, mailbox, dryrun, since, imapclie
 
     return True
 
-def main(profile, dryrun=True, mailbox_list=False, **kwargs):
-    profile_conf = config.profiles.get(profile)
-    if profile_conf is None:
-        logger.error("Invalid profile")
-        return
-
-    if 'mailbox' not in profile_conf:
-        print("No mailbox specified, list mail boxes")
-        mailbox_list = True
-
+def login(profile_conf):
     passwd = get_password(profile_conf["host"], profile_conf["user"])
     if passwd is not None:
         ssl_context = imaplib.ssl._create_stdlib_context()
@@ -337,7 +359,7 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
             trycount -= 1
         if imapclient is None:
             print(f"Can't establish connection to {profile_conf['host']}")
-            return
+            return None
         print(f"* Connected to {profile_conf['host']}")
         try:
             result = imapclient.login(profile_conf["user"], passwd)
@@ -357,7 +379,54 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
             logger.error(e.args[0].decode())
             passwd = None
     profile_conf["passwd"] = passwd
+    return imapclient
 
+def show_header(profile_index):
+    print(profile_index)
+    profile, index = profile_index.split(":")
+    mailmap = load_mailmap(profile)
+    mailinfo = mailmap.get(profile_index, None)
+    filename = mailinfo.get("filename")
+    if filename is None:
+        print(f"Can't find {profile}:{index}")
+        return
+    print(open(filename, "r").read())
+
+def show_body(profile_index):
+    print(profile_index)
+    profile, index = profile_index.split(":")
+    mailmap = load_mailmap(profile)
+    mailinfo = mailmap.get(profile_index, None)
+    mailuid = mailinfo.get("mailuid")
+    mailbox = mailinfo.get("mailbox")
+    if mailuid is None:
+        print(f"Can't find {profile}:{index}")
+        return
+    profile_conf = config.profiles.get(profile)
+    if profile_conf is None:
+        print("Invalid profile")
+        return
+    imapclient = login(profile_conf)
+    if imapclient is None:
+        return
+    if not select_mailbox(imapclient, mailbox):
+        return
+    mail = fetch_mail(imapclient, mailuid)
+    print(mail.as_string())
+
+def main(profile, dryrun=True, mailbox_list=False, **kwargs):
+    profile_conf = config.profiles.get(profile)
+    if profile_conf is None:
+        logger.error("Invalid profile")
+        return
+
+    if 'mailbox' not in profile_conf:
+        print("No mailbox specified, list mail boxes")
+        mailbox_list = True
+
+    imapclient = login(profile_conf)
+    if imapclient is None:
+        return
     if mailbox_list:
         list_mailbox(imapclient)
         return
@@ -371,11 +440,13 @@ def main(profile, dryrun=True, mailbox_list=False, **kwargs):
     if type(mailboxes) != list:
         mailboxes = [ mailboxes ]
 
+    mailmap = {}
     for mailbox in mailboxes:
         while True:
-            if delete_at_once(profile, dryrun=dryrun, since=since, imapclient=imapclient, mailbox=mailbox, **profile_conf):
+            if delete_at_once(profile, dryrun=dryrun, since=since, imapclient=imapclient, mailbox=mailbox, mailmap=mailmap, **profile_conf):
                 break
             imapclient = None
+    save_mailmap(profile, mailmap)
 
 try:
     showhelp = False
@@ -390,6 +461,12 @@ try:
         elif arg == "debug":
             logger.setLevel(logging.DEBUG)
             imaplib.Debug = 4
+        elif arg == "header":
+            show_header(sys.argv[2])
+            sys.exit(0)
+        elif arg == "body":
+            show_body(sys.argv[2])
+            sys.exit(0)
         elif arg == "list":
             mailbox_list = True
         elif arg in config.profiles:
@@ -400,6 +477,8 @@ try:
         print("  profile: %s" % ", ".join(config.profiles.keys()))
         print("  go: delete mails")
         print("  list: list mailboxes")
+        print("  header <profile:index>: show headers of the mail")
+        print("  body <profile:index>: show full source of the mail by fetching from server")
         print("  debug: debug mode")
         sys.exit(0)
 
